@@ -3,6 +3,8 @@
 #include <locale.h>
 #include <string.h>
 
+int wcwidth(wchar_t c);
+
 /* single hex char alphabet */
 char ALPHABET[] = "0123456789ABCEDF";
 
