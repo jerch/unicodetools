@@ -4,7 +4,7 @@ from time import sleep
 import os
 from termios import TCSANOW, TCSADRAIN, TCSAFLUSH, tcsetattr, tcgetattr
 from functools import partial
-from select import poll, POLLIN
+from select import poll, POLLIN, select
 from tty import setcbreak, setraw
 from termios import *
 
@@ -76,6 +76,13 @@ def _kbhit():
 
 kbhit = _kbhit()
 
+def kbhit_select(fd=sys.stdin.fileno(), timeout=0):
+    with cbreak_terminal(fd, when_exit=TCSADRAIN):
+        rds, _, _ = select([fd], [], [], timeout)
+        if rds:
+            return 1
+        return 0
+
 def getch(fd=sys.stdin.fileno()):
     with cbreak_terminal(fd, when_exit=TCSADRAIN) as rterm:
         return os.read(rterm, 1)
@@ -105,10 +112,10 @@ def width_from_terminal(start, end):
           sys.stdout.write(unichr(i) + '\x1b[6n')
           sys.stdout.flush()
           # wait for CPR on stdin
-          while not kbhit():
+          while not kbhit_select():
             sleep(.01)
           resp = ''
-          while kbhit():
+          while kbhit_select():
               resp += os.read(sys.stdin.fileno(), 1024)
           row, col = resp[2:-1].split(';')
           width = int(col)
