@@ -4,7 +4,7 @@ from time import sleep
 import os
 from termios import TCSANOW, TCSADRAIN, TCSAFLUSH, tcsetattr, tcgetattr
 from functools import partial
-from select import poll, POLLIN, select
+from select import select
 from tty import setcbreak, setraw
 from termios import *
 
@@ -63,67 +63,31 @@ rare_terminal = cbreak_terminal
 raw_terminal = partial(TerminalHandler, 'raw')
 reset_terminal = TerminalHandler.reset
 
-def _kbhit():
-    poll_obj = poll()
-    def wrapped(fd=sys.stdin.fileno(), timeout=0):
-        poll_obj.register(fd, POLLIN)
-        with cbreak_terminal(fd, when_exit=TCSADRAIN):
-            for i in poll_obj.poll(timeout):
-                if i[0] == fd and i[1] & POLLIN:
-                    return 1
-        return 0
-    return wrapped
-
-kbhit = _kbhit()
-
-def kbhit_select(fd=sys.stdin.fileno(), timeout=0):
+def kbhit(fd=sys.stdin.fileno(), timeout=0):
     with cbreak_terminal(fd, when_exit=TCSADRAIN):
         rds, _, _ = select([fd], [], [], timeout)
         if rds:
             return 1
         return 0
 
-def getch(fd=sys.stdin.fileno()):
-    with cbreak_terminal(fd, when_exit=TCSADRAIN) as rterm:
-        return os.read(rterm, 1)
-
-def getwch(fd=sys.stdin.fileno(), encoding=sys.stdin.encoding):
-    raw_str = ""
-    for i in xrange(4):
-        if raw_str:
-            if kbhit():
-                raw_str += getch(fd)
-            else: break
-        else:
-            raw_str = getch(fd)
-        try:
-            return unicode(raw_str, encoding)
-        except UnicodeDecodeError: continue
-    return unicode(raw_str, encoding)
-
 def width_from_terminal(start, end):
     s = ''
-    try:
-      mode = tcgetattr(sys.stdin.fileno())
-      mode[LFLAG] &= ~ECHO
-      tcsetattr(sys.stdin.fileno(), TCSADRAIN, mode)
-      print
-      for i in range(start, end):
-          sys.stdout.write(unichr(i) + '\x1b[6n')
-          sys.stdout.flush()
-          # wait for CPR on stdin
-          while not kbhit_select():
-            sleep(.01)
-          resp = ''
-          while kbhit_select():
-              resp += os.read(sys.stdin.fileno(), 1024)
-          row, col = resp[2:-1].split(';')
-          width = int(col)
-          s += str(width - 1)
-          print '\x1b[1K\x1b[Gcodepoint:', i, 'width:', width - 1
-    finally:
-        mode[LFLAG] |= ECHO
-        tcsetattr(sys.stdin.fileno(), TCSADRAIN, mode)
+    print
+    for i in range(start, end):
+        # we have to use 'unicode-escape' since narrow build cannot use
+        # codepoints > 65535
+        sys.stdout.write(('\\U%08x' % i).decode('unicode-escape') + '\x1b[6n')
+        sys.stdout.flush()
+        # wait for CPR on stdin
+        while not kbhit():
+          sleep(.01)
+        resp = ''
+        while kbhit():
+            resp += os.read(sys.stdin.fileno(), 1024)
+        row, col = resp[2:-1].split(';')
+        width = int(col)
+        s += str(width - 1)
+        print '\x1b[1K\x1b[Gcodepoint:', i, 'width:', width - 1
     return s
 
 
@@ -131,7 +95,11 @@ if __name__ == '__main__':
     if len(sys.argv) != 4:
         print "error, usage: query_terminal.py <start> <end> <file>"
         sys.exit(1)
+    start = int(sys.argv[1], 16 if sys.argv[1].startswith('0x') else 10)
+    end = int(sys.argv[2], 16 if sys.argv[2].startswith('0x') else 10)
+    result = ''
+    # set terminal into cbreak mode to avoid echoing CPR
+    with cbreak_terminal():
+        result = width_from_terminal(start, end)
     with open(sys.argv[3], 'w') as f:
-        start = int(sys.argv[1], 16 if sys.argv[1].startswith('0x') else 10)
-        end = int(sys.argv[2], 16 if sys.argv[2].startswith('0x') else 10)
-        f.write(width_from_terminal(start, end))
+        f.write(result)
